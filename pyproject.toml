@@ -1,0 +1,49 @@
+[project]
+name = "criteo-uplift-modeling"
+version = "0.1.0"
+description = "Reproducible benchmark of uplift-modeling approaches (meta-learners, causal forests, DML, IV) on the Criteo Uplift Prediction dataset."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ilia Ekhlakov" }]
+keywords = ["uplift-modeling", "causal-inference", "cate", "criteo", "econml", "causalml"]
+
+dependencies = [
+    # Core scientific stack
+    "numpy>=1.26,<2.0",   # shap 0.46 breaks under numpy 2.x (dtype API change)
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "scikit-learn>=1.3",
+    "matplotlib>=3.7",
+    "seaborn>=0.12",
+    # Pin modern numba/llvmlite: shap pulls numba, and older numba (0.53)
+    # forces llvmlite 0.36, which cannot build on Python >= 3.10.
+    "numba>=0.60",
+    "llvmlite>=0.43",
+    # Uplift / causal inference
+    "scikit-uplift>=0.5",   # Qini/AUUC/uplift@k metrics + uplift plots (dataset via criteo_data.py)
+    "econml>=0.15",         # DML, Causal Forest (GRF), DMLIV, DomainAdaptationLearner (DA)
+    "causalml>=0.15",       # S/T/X/R/DR meta-learners, Uplift RF, DragonNet
+    # Base learners
+    "lightgbm>=4.0",        # primary base learner
+    "catboost>=1.2",        # alternative base learner
+    # HPO & interpretation
+    "optuna>=3.0",          # hyperparameter optimization (05_hpo.ipynb)
+    "shap>=0.44",           # HTE feature importance (00_eda.ipynb)
+    # Notebook runtime
+    "jupyterlab>=4.0",
+    "ipywidgets>=8.0",
+]
+
+# DragonNet (04_advanced.ipynb) needs TensorFlow, but tensorflow's dependency
+# pins drag numba/llvmlite/numpy down to versions that will not build on
+# Python 3.12. So it is intentionally NOT a locked dependency here — install it
+# on its own if you want DragonNet: `uv pip install "tensorflow>=2.16"`.
+# Without it, notebook 04 skips DragonNet and runs everything else.
+
+[project.urls]
+Repository = "https://github.com/firefly1248/criteo-uplift-modeling"
+
+[tool.uv]
+package = false

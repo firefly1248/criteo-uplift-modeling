@@ -1,0 +1,43 @@
+# Generated model artifacts and results (reproducible by re-running the notebooks)
+artifacts/
+leaderboard.csv
+*.pkl
+
+# Generated figures (re-created on notebook run); the curated set in figures/ is committed for the README
+*.png
+!figures/*.png
+
+# CatBoost training logs (created during notebook runs)
+catboost_info/
+
+# Jupyter
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_convert/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+
+# Dataset cache (scikit-uplift downloads here; ~300 MB, never commit)
+data/
+*.csv.gz
+criteo*.csv
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Internal working docs (kept local, not part of the public repo)
+CLAUDE.md
+PLAN.md
+CONFORMAL_NOTES.md
