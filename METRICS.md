@@ -28,7 +28,11 @@ from sklift.metrics import uplift_auc_score
 auuc = uplift_auc_score(y_true, uplift_scores, treatment)
 ```
 
-> Scale note: sklift's `uplift_auc_score` returns a normalized coefficient (area rescaled against the ideal curve), not the raw "area minus diagonal" of step 3, so its values are comparable to `qini_auc_score`, not to the literal formula above. All AUUC/Qini numbers in this repo are on that normalized scale.
+> Scale note: sklift's `uplift_auc_score` returns a normalized coefficient (area rescaled against the ideal curve), not the raw "area minus diagonal" of step 3. All AUUC/Qini numbers in this repo are on that normalized scale.
+>
+> They are **not** numerically comparable to each other. Both are `(actual - baseline) / (perfect - baseline)`, but against different oracles: `perfect_uplift_curve` puts treated responders and control non-responders first, and on a 0.3%-positive outcome its area is enormous, so normalized AUUC lands at 0.004-0.009 while normalized Qini lands at 0.10-0.25 for the same model. Compare models within a column, never across columns.
+>
+> On this dataset they also cannot disagree on ranking. `uplift_curve` returns `(y_t/n_t - y_c/n_c) * n_all` and `qini_curve` returns `y_t - y_c * n_t/n_c`, which differ pointwise by exactly `n_all/n_t`; under a constant assignment probability that factor is ~1/0.85 everywhere along the curve, and both scores then divide by a model-independent oracle area. Across all 23 rows of this repo's leaderboard the ratio AUUC/Qini is 0.0330-0.0338 and the two columns produce identical rankings. Reporting both is convention, not a second opinion.
 
 ---
 
@@ -104,7 +108,20 @@ L_DR(τ) = E[(Ỹ_DR − τ(X))²]
 
 **Key property:** Doubly robust - consistent if either the outcome model or the propensity model is correctly specified.
 
-**Use for HPO:** Preferred over R-loss in all cases; same computational cost.
+**Use for HPO:** Generally preferred over R-loss at the same computational cost - but only where it carries signal. Check that first.
+
+**Signal check (do this before trusting a DR-loss search).** `E[Ỹ_DR | X] = tau(X)`, so the largest possible reduction in `E[(Ỹ_DR - tau_hat)^2]` is exactly `Var(tau(X))`. Compare three numbers: `Var(pseudo)`, the best objective value, and the `Var(tau)` ceiling. If the search's apparent improvement is of the order of (or larger than) the ceiling, it is fitting the objective's own tails, not the effect.
+
+**What the check catches (notebook 05, Criteo).** The same 50-trial search was run twice, differing only in how the propensity inside the pseudo-outcome was obtained:
+
+| `ê` | Var(pseudo) | variance explained | gain / ceiling | tuned vs baseline Qini |
+|---|---|---|---|---|
+| fitted LGBM | 0.0434 | 0.21% | ~2x - impossible | 0.069 vs 0.159, tuning hurts |
+| known constant | 0.0158 | 0.16% | 0.6x - consistent | 0.271 vs 0.191, tuning helps |
+
+In a randomized design `e` is known, so fitting it estimates noise, and that noise gets divided into rare-event residuals. It supplied 63% of the pseudo-outcome's variance here and inverted the notebook's conclusion. The diagnostic flags the broken run without hindsight: claiming an improvement roughly twice the largest one physically available is only possible if the search is fitting the objective's own sampling error.
+
+Two readings to avoid. Do not conclude from a low variance-explained figure that the objective is useless - even the working run explains only 0.16%, but the ceiling is 0.27%, so it captures ~60% of what is actually available. And do not diagnose a DR-loss winner that underperforms on Qini as the Schuler et al. (2018) surrogate-vs-true-risk mismatch by default; that describes the two criteria ranking models *differently*, whereas a noise-dominated objective does not rank them at all and converges on the most shrunk model in the search space. Check the ceiling ratio before choosing between those explanations.
 
 **Implementation note:** Ỹ_DR pseudo-outcomes from a pretrained DR-Learner can be reused to tune any other model without recomputing nuisance models.
 
@@ -158,6 +175,8 @@ lb, ub = cf_dml.effect_interval(X_test, alpha=0.05)
 
 **Criteo finding (this repo, notebook 02, CausalForest at alpha=0.10):** ~10.4% confident persuadables, ~0.006% confident sleeping dogs, ~89.6% uncertain (CI crosses 0). An external comparison (arXiv:2604.06123) reports far fewer confident persuadables (~1.9% at 95%); the gap is down to CI level, forest tuning, and sample, so quote the repo number for repo claims.
 
+**Read that against the right null.** A two-sided 90% CI excludes the true value 10% of the time, but split 5% per side, and the persuadable rule (`tau_hat > 0 and lb > 0`) is one-sided. So under `tau(x) = 0` everywhere, chance alone produces ~5% persuadables, not ~10%. The observed 10.4% is roughly 2x the null, and with 100,000 pointwise tests and no multiplicity correction even that is soft. The genuinely informative number is the asymmetry: 10.4% persuadables against 0.006% sleeping dogs is what a positive ATE looks like, and it is not by itself evidence of heterogeneity. Note also that `CausalForestDML` (notebook 03) reports 3.28% sleeping dogs on the same data at the same alpha, a 500x gap against notebook 02's forest that the estimators' different tuning does not obviously explain.
+
 ---
 
 ### 3.2 TMLE Bootstrap CIs
@@ -171,7 +190,9 @@ TMLE (Targeted Maximum Likelihood) produces valid asymptotic CIs for ATE and ATT
 The CIs above quantify uncertainty of the CATE *function* `tau(x)` (an estimation target). Conformal prediction instead builds intervals for the *realization* `Y(1) - Y(0)` of a new unit, with a finite-sample, distribution-free, marginal guarantee. Two routes:
 
 - **Counterfactual route** (Lei and Candes 2021): weighted split conformal on each arm; the weights are inverse-propensity and *collapse to plain split conformal under a constant randomized propensity*.
-- **Pseudo-outcome route** (Alaa et al. 2023, "conformal meta-learners"): split conformal on DR pseudo-outcomes. Guarantees pseudo-outcome coverage always; ITE coverage follows for DR/IPW pseudo-outcomes by stochastic dominance. No weighting needed (the pseudo-outcome is computable for every unit).
+- **Pseudo-outcome route** (Alaa et al. 2023, "conformal meta-learners"): split conformal on DR pseudo-outcomes. Guarantees pseudo-outcome coverage always. No weighting needed (the pseudo-outcome is computable for every unit). ITE coverage is weaker than it is usually quoted - see below.
+
+**What Alaa et al. actually prove.** Theorem 1: if the calibration scores dominate the oracle ITE scores, there exists `alpha* in (0,1)` such that ITE coverage holds `for all alpha in (0, alpha*)` - under any one of (i) first-order stochastic dominance, (ii) second-order, or (iii) monotone convex dominance. `alpha* = 1` follows **only** under condition (i). Theorem 2 and its Table 2 show that with a known propensity and the absolute-residual score (the one used here), the DR- and IPW-learners satisfy condition **(iii)**, monotone convex dominance, model- and distribution-free; the X-learner admits no distribution-free order at all. So `alpha* = 1` does not follow for the DR-learner, and the paper lists this as one of its two key limitations: "exact characterization of `alpha*` is difficult and depends on the data distribution", with `alpha*` evaluated only empirically in their Section 5. The paper does argue the validity region covers the practically relevant range (`alpha` of 0.05 or 0.1), but that is an argument plus empirics, not a theorem. Do not state ITE coverage as unconditional.
 
 Split-conformal quantile with the finite-sample correction:
 ```python
@@ -202,10 +223,14 @@ Nuisance model quality check     → propensity calibration (Brier score), outco
 | Pitfall | Description | Fix |
 |---------|-------------|-----|
 | **Overlap violation** | ê(X) near 0 or 1 → IPW explodes | Clip propensity; check overlap via histograms |
+| **Fitting a propensity in an RCT** | Assignment is constant by design, so a flexible model fits noise; here LGBM gave ê in [0.497, 0.99] and inflated the AIPW SE 59% above a plain difference in means | Pass the known constant `e = T.mean()`. Clipping does not fix it (0.0015% of rows) |
+| **Auditing the wrong model class** | The overlap check uses a different, more constrained learner than the DR pipeline actually fits, so it certifies overlap for a model nobody runs | Audit the exact propensity the estimators use, not a stand-in |
 | **SUTVA violation** | Treatment of one unit affects another | Flag network effects; consider spatial models |
 | **Leaky nuisance** | Nuisance fitted on same fold as CATE | Always use cross-fitting (separate folds) |
-| **Qini vs AUUC confusion** | Different normalization → not directly comparable | Report both; use Qini for budget-fixed scenarios |
-| **Optimizing rank, evaluating calibration** | Qini-optimal model may have biased τ̂ scale | Add calibration check if absolute effects matter |
+| **Qini vs AUUC confusion** | Different oracle normalization → the two columns are ~30x apart in scale, and under a constant propensity they are proportional, so they cannot disagree on ranking | Compare within a column; do not read agreement between them as corroboration |
+| **Metric with no interval** | Uplift@k on a rare outcome rests on a handful of control conversions (12-24 here) and can rank a model first while it captures fewer treated conversions than the baseline | Bootstrap Uplift@k too, and print the underlying counts |
+| **Optimizing rank, evaluating calibration** | Qini-optimal model may have biased τ̂ scale; the leader here predicts effects in [-0.68, +1.80] for a true effect of +0.00125 | Always print `tau_min / tau_max / std` and a per-decile calibration check |
+| **Surrogate objective with no signal** | DR-loss can be dominated by IPW tails, making its minimiser "predict the mean" | Compare best objective to `Var(pseudo)` and the `Var(tau)` ceiling (§2.2) |
 
 ---
 

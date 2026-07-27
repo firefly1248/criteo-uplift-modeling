@@ -34,9 +34,18 @@ These figures come from a cited large-scale comparison, **not** from this repo's
 
 ### 2. Feature Importance
 
-- f8 is the dominant HTE driver (SHAP analysis across multiple studies)
-- f0-f3 drive baseline conversion rate
+- f8 is the dominant HTE driver (SHAP across multiple studies, and reproduced here: f8 tops mean |SHAP|
+  on this repo's own treated-arm model, see `eda_shap.png`)
+- Ranking by LightGBM gain on the outcome model is a different ordering (f11, f4, f8, f2) - gain ranks
+  drivers of E[Y|X], not of tau(x)
 - Features are randomly projected - no domain interpretation available
+- Scales differ by two orders of magnitude (sd from 0.023 for f11 to 7.03 for f9), and f4, f8, f11 are
+  near point masses with tails. Irrelevant for trees, but it makes raw linear coefficients unreadable as
+  an importance ranking - compare `coef * sd`, not `|coef|`. In notebook 03 the correction shrinks f11's
+  apparent lead from 63x to 3.0x without changing who leads
+- SHAP on the treated-arm outcome model and the standardized SparseLinearDML coefficients disagree
+  (f8 first vs f11 first). Expected: a linear final stage sees only linear heterogeneity, and SHAP there
+  explains E[Y|X,T=1] rather than tau(x)
 
 ### 3. Criteo-Specific IV Structure
 
@@ -46,18 +55,23 @@ Z = treatment_offer  →  T = exposure  →  Y = conversion
 ```
 - ATE estimated via standard meta-learners on `treatment` ≈ Intent-to-Treat (ITT)
 - LATE (effect on compliers) requires IV methods: `DMLIV`, `IntentToTreatDRIV` from econml
-- Non-compliance rate: fraction treated but not exposed (or vice versa) - check in EDA
+- Compliance is one-sided and this is exact, not approximate: `exposure=1 & treatment=0` has a count of
+  0 across all 13,979,592 rows, so Pr(T=1 | Z=0) = 0 and monotonicity holds by construction. Offer
+  take-up Pr(T=1 | Z=1) = 0.0360 on the full data
 
-### 4. Baseline Conversion Rates (approximate)
+### 4. Baseline Conversion Rates (recomputed on the full v2.1 file)
 
 | Group | Conversion Rate |
 |-------|----------------|
-| Control | ~0.22% |
-| Treatment | ~0.30% |
-| Overall | ~0.29% |
-| ATE | ~+0.08 pp full-data (relative lift ~+35-40%); ~+0.12 pp on the 500K sample |
+| Control | 0.1938% |
+| Treatment | 0.3089% |
+| Overall | 0.2917% |
+| ATE | +0.1152 pp full-data (SE 0.0000344, z = 33.5; relative lift +59.5%); +0.1252 pp on the 500K sample |
 
-(Approximate, derived from the documented overall CR ≈ 0.29% and treatment ratio ≈ 0.85 - confirm from notebook 00's executed output.)
+Computed directly over all 13,979,592 rows of the cached file, not derived. An earlier version of this
+table listed control 0.22% and ATE +0.08 pp with a +35-40% lift; those are v1-dataset figures and do not
+describe v2.1. The 500K sample's +0.1252 pp sits 0.5 SE from the full-data value, so the prototyping
+sample is representative and needs no "sampling variation" explanation.
 
 Very small absolute effects → metrics like AUUC and Qini are sensitive to noise; use large hold-out sets (≥1M rows) for stable evaluation. At the ~15% control share, control conversions are the scarcest cell and dominate the variance.
 
@@ -76,25 +90,48 @@ Very small absolute effects → metrics like AUUC and Qini are sensitive to nois
 ### Model Building
 
 1. Always cross-fit nuisance models (propensity + outcome); fitting on the same data biases CATE estimates
-2. Clip propensity scores to [0.01, 0.99]; even in RCTs, extreme scores appear in small subgroups
+2. In a randomized experiment, pass the known constant propensity instead of fitting one. Fitting a
+   flexible propensity on a treatment that is Bernoulli(0.85) by design fits pure noise: the cross-fitted
+   LGBM propensity here spans [0.497, 0.99] and inflates the AIPW standard error by 59% over a plain
+   difference in means (notebook 04). Clipping to [0.01, 0.99] does not rescue this - it touches 0.0015%
+   of rows. Clip anyway as a guard for confounded data, but do not treat it as the fix
 3. LightGBM > XGBoost as base learner on this dataset (faster, similar accuracy)
 4. For meta-learners, fix nuisance hyperparameters first, then tune the CATE model
-5. CausalForestDML combines DML robustness with forest flexibility and holds up well across studies
-6. The S-Learner's built-in regularization helps here: the treatment effect is small, so a single model naturally shrinks it toward zero
+5. CausalForestDML combines DML robustness with forest flexibility and holds up well across studies;
+   on this repo's executed run it lands mid-table (rank 9 of 23), inside the leader's bootstrap tier
+6. The S-Learner's built-in regularization is often argued to help when the effect is small, but it does
+   not show up here: S-Learner ranks 11 (CatBoost) and 13 (LightGBM) of 23
+7. Check the scale of tau_hat, not just its ranking. The top-ranked model on this leaderboard predicts
+   effects in [-0.68, +1.80] for a true effect of +0.00125, which is fine for Qini and useless for sizing
+   a campaign
 
 ### HPO
 
-- Use DR-loss as the primary HPO objective (doubly robust, fast to compute)
-- Run HPO on a 500K subsample with 5-fold CV; results transfer well to the full dataset
+- DR-loss works as an HPO objective on Criteo, but only once the propensity inside the pseudo-outcome
+  is the known constant. Notebook 05 runs the identical search both ways: with a fitted LGBM propensity
+  the tuned model loses to the untuned baseline (Qini 0.069 vs 0.159); with the known constant it wins
+  clearly (0.271 vs 0.191). The fitted propensity supplied 63% of the pseudo-outcome variance
+- Diagnostic, three lines, run it every time: compare the best objective against `Var(pseudo)` and the
+  achievable gain against the ceiling `Var(tau)`. A search claiming more improvement than the ceiling
+  allows is fitting its own sampling noise. Judge the gain against the ceiling, not against the total -
+  the working run explains just 0.16% of pseudo-outcome variance against a 0.27% ceiling, which is fine
+- Run HPO on a 500K subsample; notebook 05 uses 3-fold CV inside the training set
 - Final model selection: Qini on the 20% hold-out (never touched during HPO)
-- Optuna TPE sampler with MedianPruner works well (100 trials is sufficient)
-- CausalForest and CausalForestDML have built-in `.tune()`; prefer it over manual Optuna
+- Optuna TPE sampler, 50 trials, no pruner (each trial is an atomic `cross_val_score`, nothing to prune)
+- `econml.dml.CausalForestDML` has a built-in `.tune()`. `econml.grf.CausalForest` does **not** - it has
+  no `tune` method in econml 0.16.0. Neither is used in this repo
 
 ### Evaluation
 
-- Always report both AUUC and Qini; they can disagree on model ranking
-- Report Uplift@10% and @20% as business-interpretable metrics
-- For CausalForest, segment the population into persuadables/uncertain/sleeping dogs using CIs
+- AUUC and Qini can disagree in general, but not as sklift computes them on a constant-propensity
+  design: the two curves differ pointwise only by `num_all/num_trmnt`, so the scores are proportional.
+  Across all 23 rows of this repo's leaderboard the ratio AUUC/Qini is 0.0330-0.0338 and the rankings
+  are identical. Reporting both here is convention, not corroboration
+- Report Uplift@10% and @20% as business-interpretable metrics, but print the underlying counts with
+  them. At this hold-out size the control slice of Uplift@10% holds 12-24 conversions, and the metric
+  can rank a model first while it captures fewer treated conversions than the baseline
+- For CausalForest, segment the population into persuadables/uncertain/sleeping dogs using CIs, and
+  state the null rate: the persuadable rule is one-sided, so at alpha=0.10 chance alone yields ~5%
 - Plot Qini curves for all models together; visual overlap tells you where models diverge
 
 ---
@@ -104,7 +141,7 @@ Very small absolute effects → metrics like AUUC and Qini are sensitive to nois
 | Pitfall | Details |
 |---------|---------|
 | **ITT vs LATE confusion** | Using `treatment` as T gives ITT; using `exposure` gives biased ATE (non-random) |
-| **Small ATE inflating noise** | ATE ≈ 0.08 pp - ranking metrics are noisy on small hold-outs |
+| **Small ATE inflating noise** | ATE = +0.115 pp - ranking metrics are noisy on small hold-outs |
 | **Memorizing nuisance** | Fitting propensity/outcome on the same data as CATE → overfit |
 | **S-Learner underfitting** | Tree depth too small → treatment feature ignored; use min_child_samples carefully |
 | **DA-Learner instability** | Domain adaptation can diverge if control/treatment distributions are too similar |
@@ -122,7 +159,9 @@ Very small absolute effects → metrics like AUUC and Qini are sensitive to nois
 | Chernozhukov et al. (2018) - "Double/Debiased ML" | DML framework |
 | Shi et al. (2019) - "Adapting Neural Networks for Uplift" | DragonNet |
 | Künzel et al. (2019) - "Meta-learners for HTE" | X-Learner |
-| UpliftBench (2026) | Large-scale empirical comparison on Criteo v2.1 |
+| Alaa, Ahmad & van der Laan (2023), arXiv:2308.14895 | Conformal meta-learners for ITE intervals |
+| Lei & Candès (2021), arXiv:2006.06138 | Conformal counterfactual / ITE inference |
+| arXiv:2604.06123 (2026) | Large-scale empirical comparison on Criteo v2.1 (referred to as "UpliftBench" in earlier drafts of these notes; cite the arXiv ID, the short name is not findable) |
 
 ---
 
