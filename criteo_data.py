@@ -1,16 +1,10 @@
 """Drop-in replacement for ``sklift.datasets.fetch_criteo``.
 
-scikit-uplift downloads Criteo from an S3 bucket that Criteo has since disabled
-(the request now returns HTTP 403 / ``AllAccessDisabled``), so the stock loader
-no longer works. This module reads the same dataset from the official Hugging
-Face mirror (``criteo/criteo-uplift``) and returns the same ``Bunch`` the stock
-loader did, so the notebooks keep using the familiar API.
+sklift's S3 bucket now returns HTTP 403, so this reads the byte-identical file
+(same MD5) from the Hugging Face mirror ``criteo/criteo-uplift`` and returns the
+same ``Bunch``. Cached in ``~/scikit-uplift-data`` (~297 MB, downloaded once).
 
-The mirrored file is byte-identical to the one scikit-uplift used to ship
-(same MD5), so results are unchanged. It is cached under ``~/scikit-uplift-data``
-and downloads only once (~297 MB).
-
-Usage mirrors the original::
+Usage::
 
     from criteo_data import fetch_criteo
     ds = fetch_criteo(target_col='conversion')
@@ -53,6 +47,7 @@ def fetch_criteo(target_col="conversion", treatment_col="treatment", return_X_y_
     if target_col == "all":
         target_col = _TARGET_COLS
 
+    # Nullable Int8, as in sklift's loader; callers cast with np.asarray(..., dtype=float)
     dtypes = {c: "Int8" for c in _TREATMENT_COLS + _TARGET_COLS}
     df = pd.read_csv(_cached_path(), dtype=dtypes)
 

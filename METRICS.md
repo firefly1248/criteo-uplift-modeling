@@ -32,7 +32,7 @@ auuc = uplift_auc_score(y_true, uplift_scores, treatment)
 >
 > They are **not** numerically comparable to each other. Both are `(actual - baseline) / (perfect - baseline)`, but against different oracles: `perfect_uplift_curve` puts treated responders and control non-responders first, and on a 0.3%-positive outcome its area is enormous, so normalized AUUC lands at 0.004-0.009 while normalized Qini lands at 0.10-0.25 for the same model. Compare models within a column, never across columns.
 >
-> On this dataset they also cannot disagree on ranking. `uplift_curve` returns `(y_t/n_t - y_c/n_c) * n_all` and `qini_curve` returns `y_t - y_c * n_t/n_c`, which differ pointwise by exactly `n_all/n_t`; under a constant assignment probability that factor is ~1/0.85 everywhere along the curve, and both scores then divide by a model-independent oracle area. Across all 23 rows of this repo's leaderboard the ratio AUUC/Qini is 0.0330-0.0338 and the two columns produce identical rankings. Reporting both is convention, not a second opinion.
+> On this dataset they also do not disagree on ranking. `uplift_curve` returns `(y_t/n_t - y_c/n_c) * n_all` and `qini_curve` returns `y_t - y_c * n_t/n_c`, which differ pointwise by exactly `n_all/n_t`; under a constant assignment probability that factor is ~1/0.85 everywhere along the curve, and both scores then divide by a model-independent oracle area. Across all 23 rows of this repo's leaderboard the ratio AUUC/Qini is 0.0330-0.0338 and the two columns produce identical rankings. Reporting both is convention, not a second opinion.
 
 ---
 
@@ -110,18 +110,18 @@ L_DR(τ) = E[(Ỹ_DR − τ(X))²]
 
 **Use for HPO:** Generally preferred over R-loss at the same computational cost - but only where it carries signal. Check that first.
 
-**Signal check (do this before trusting a DR-loss search).** `E[Ỹ_DR | X] = tau(X)`, so the largest possible reduction in `E[(Ỹ_DR - tau_hat)^2]` is exactly `Var(tau(X))`. Compare three numbers: `Var(pseudo)`, the best objective value, and the `Var(tau)` ceiling. If the search's apparent improvement is of the order of (or larger than) the ceiling, it is fitting the objective's own tails, not the effect.
+**Signal check (do this before trusting a DR-loss search).** Fit a constant-mean model (`DummyRegressor`) on the same CV folds, take row-wise out-of-fold squared errors for it and for the candidate, and report the mean difference with its paired SE. Since `E[Ỹ_DR | X] = tau(X)`, no model can gain more than `Var(tau(X))`, which is unknown and can be tiny next to `Var(pseudo)`. A winner whose gain is within about one SE of zero means the search had nothing to optimize, and its pick is noise. Do not bound `Var(tau)` from hold-out decile spreads: that leaks the hold-out into HPO and is not a valid bound.
 
-**What the check catches (notebook 05, Criteo).** The same 50-trial search was run twice, differing only in how the propensity inside the pseudo-outcome was obtained:
+**What the check shows (notebook 05, Criteo).** The same 50-trial search, run on two pseudo-outcomes that differ only in the propensity:
 
-| `ê` | Var(pseudo) | variance explained | gain / ceiling | tuned vs baseline Qini |
+| `ê` | Var(pseudo) | winner gain over mean (z) | baseline gain over mean (z) | tuned vs baseline Qini |
 |---|---|---|---|---|
-| fitted LGBM | 0.0434 | 0.21% | ~2x - impossible | 0.069 vs 0.159, tuning hurts |
-| known constant | 0.0158 | 0.16% | 0.6x - consistent | 0.271 vs 0.191, tuning helps |
+| fitted LGBM | 0.0434 | -4.4e-5 (-0.4) | -2.5e-3 (-5.0) | 0.105 vs 0.159 |
+| known constant | 0.0158 | +2.5e-5 (+0.9) | -3.0e-4 (-3.6) | 0.271 vs 0.191, same bootstrap tier |
 
-In a randomized design `e` is known, so fitting it estimates noise, and that noise gets divided into rare-event residuals. It supplied 63% of the pseudo-outcome's variance here and inverted the notebook's conclusion. The diagnostic flags the broken run without hindsight: claiming an improvement roughly twice the largest one physically available is only possible if the search is fitting the objective's own sampling error.
+The known constant removes 63% of the pseudo-outcome's variance and its bias, which matters for any ATE built from it. It does not make DR-loss informative for HPO at this sample size: neither search beats the constant, both winners are the most shrunk configs in the space, and their Qini goes opposite ways.
 
-Two readings to avoid. Do not conclude from a low variance-explained figure that the objective is useless - even the working run explains only 0.16%, but the ceiling is 0.27%, so it captures ~60% of what is actually available. And do not diagnose a DR-loss winner that underperforms on Qini as the Schuler et al. (2018) surrogate-vs-true-risk mismatch by default; that describes the two criteria ranking models *differently*, whereas a noise-dominated objective does not rank them at all and converges on the most shrunk model in the search space. Check the ceiling ratio before choosing between those explanations.
+One reading to avoid: do not diagnose a DR-loss winner that underperforms on Qini as the Schuler et al. (2018) surrogate-vs-true-risk mismatch by default. That describes the two criteria ranking models *differently*; a noise-dominated objective does not rank them at all and converges on the most shrunk model in the search space. Run the signal check before choosing between those explanations.
 
 **Implementation note:** Ỹ_DR pseudo-outcomes from a pretrained DR-Learner can be reused to tune any other model without recomputing nuisance models.
 
@@ -175,7 +175,7 @@ lb, ub = cf_dml.effect_interval(X_test, alpha=0.05)
 
 **Criteo finding (this repo, notebook 02, CausalForest at alpha=0.10):** ~10.4% confident persuadables, ~0.006% confident sleeping dogs, ~89.6% uncertain (CI crosses 0). An external comparison (arXiv:2604.06123) reports far fewer confident persuadables (~1.9% at 95%); the gap is down to CI level, forest tuning, and sample, so quote the repo number for repo claims.
 
-**Read that against the right null.** A two-sided 90% CI excludes the true value 10% of the time, but split 5% per side, and the persuadable rule (`tau_hat > 0 and lb > 0`) is one-sided. So under `tau(x) = 0` everywhere, chance alone produces ~5% persuadables, not ~10%. The observed 10.4% is roughly 2x the null, and with 100,000 pointwise tests and no multiplicity correction even that is soft. The genuinely informative number is the asymmetry: 10.4% persuadables against 0.006% sleeping dogs is what a positive ATE looks like, and it is not by itself evidence of heterogeneity. Note also that `CausalForestDML` (notebook 03) reports 3.28% sleeping dogs on the same data at the same alpha, a 500x gap against notebook 02's forest that the estimators' different tuning does not obviously explain.
+**Read that against the right null.** A two-sided 90% CI excludes the true value 10% of the time, but split 5% per side, and the persuadable rule (`tau_hat > 0 and lb > 0`) is one-sided. So under `tau(x) = 0` everywhere, chance alone produces ~5% persuadables, not ~10%. The observed 10.4% is roughly 2x the null, and with 100,000 pointwise tests and no multiplicity correction even that is soft. The genuinely informative number is the asymmetry: 10.4% persuadables against 0.006% sleeping dogs is what a positive ATE looks like, and it is not by itself evidence of heterogeneity. Note also that `CausalForestDML` (notebook 03) reports 3.70% sleeping dogs on the same data at the same alpha, a 600x gap against notebook 02's forest that the estimators' different tuning does not obviously explain.
 
 ---
 
@@ -229,8 +229,8 @@ Nuisance model quality check     → propensity calibration (Brier score), outco
 | **Leaky nuisance** | Nuisance fitted on same fold as CATE | Always use cross-fitting (separate folds) |
 | **Qini vs AUUC confusion** | Different oracle normalization → the two columns are ~30x apart in scale, and under a constant propensity they are proportional, so they cannot disagree on ranking | Compare within a column; do not read agreement between them as corroboration |
 | **Metric with no interval** | Uplift@k on a rare outcome rests on a handful of control conversions (12-24 here) and can rank a model first while it captures fewer treated conversions than the baseline | Bootstrap Uplift@k too, and print the underlying counts |
-| **Optimizing rank, evaluating calibration** | Qini-optimal model may have biased τ̂ scale; the leader here predicts effects in [-0.68, +1.80] for a true effect of +0.00125 | Always print `tau_min / tau_max / std` and a per-decile calibration check |
-| **Surrogate objective with no signal** | DR-loss can be dominated by IPW tails, making its minimiser "predict the mean" | Compare best objective to `Var(pseudo)` and the `Var(tau)` ceiling (§2.2) |
+| **Optimizing rank, evaluating calibration** | Qini-optimal model may have biased τ̂ scale; the runner-up here (`R-Learner (CB)`) predicts effects in [-1.62, +1.09] for a true effect of +0.00125 | Always print `tau_min / tau_max / std` and a per-decile calibration check |
+| **Surrogate objective with no signal** | DR-loss can be dominated by IPW tails, making its minimiser "predict the mean" | Compare out-of-fold errors against a constant-mean model with a paired SE (§2.2) |
 
 ---
 

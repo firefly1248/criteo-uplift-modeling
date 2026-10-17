@@ -103,16 +103,17 @@ The main finding is that the leaderboard is mostly noise at this sample size. Th
 | Model (top of leaderboard) | Qini | 95% bootstrap CI |
 |---|---|---|
 | DR-LGBM tuned (nb 05) | 0.271 | [0.145, 0.408] |
-| DR-Learner (LightGBM) (nb 01) | 0.253 | [0.112, 0.406] |
 | R-Learner (CatBoost) (nb 01) | 0.241 | [0.120, 0.376] |
+| DR-Learner, fitted e (nb 04) | 0.238 | [0.093, 0.383] |
 | Outcome-rank baseline | 0.209 | [0.176, 0.247] |
 
-- The ranking is not significant: the leader beats the runner-up in only 64% of 2,000 bootstrap resamples, and 16 of 23 rows fall inside its "top tier" (not beaten in ≥97.5% of resamples). Two more sit within Monte-Carlo error of that boundary. Read tiers, not the point ordering.
+- The ranking is not significant: the leader beats the runner-up in only 68% of 2,000 bootstrap resamples, and 16 of 23 rows fall inside its "top tier" (not beaten in ≥97.5% of resamples). Two of them sit within Monte-Carlo error of that boundary. Read tiers, not the point ordering.
 - The outcome-rank baseline (Qini 0.209) beats most real uplift models. Plain "target by predicted P(Y=1|X)" is hard to beat on this dataset.
-- The textbook ranking DR > R > X > T > S does not hold: the base learner matters more than the recipe. R-Learner is 3rd with CatBoost (0.241) but near the bottom with LightGBM (0.140), and both X-Learners sit at the bottom.
-- **Do not fit a propensity you already know.** Treatment is Bernoulli(0.85) by design, but a 300-tree LightGBM asked to predict it produces ê spanning [0.497, 0.99]. In notebook 04 that inflates the AIPW standard error 59% above a plain difference in means and pushes the ATE confidence interval across zero; with the known constant, AIPW is *more* efficient than the difference in means (SE ratio 0.96) and the CI is [+0.00065, +0.00143]. In notebook 05 the same mistake supplied 63% of the DR pseudo-outcome's variance and inverted the entire HPO conclusion: tuned-vs-baseline Qini goes from 0.069 vs 0.159 (tuning hurts) to 0.271 vs 0.191 (tuning helps) on that one line.
-- **Ranking well is not estimating well.** The leaderboard now prints `tau_min`/`tau_max`. Nineteen of 23 rows predict individual effects more than 100x the ~0.00125 ATE - `DR-Learner (CB)` reaches +5.57. Those models rank acceptably and are useless for sizing a campaign. The forests are the well-behaved exception (`CausalForestDML` spans [-0.007, +0.047]).
-- **AUUC adds nothing next to Qini here.** Under sklift's normalization with a constant assignment probability the two are proportional (ratio 0.0330-0.0338 across all rows) and rank identically.
+- The textbook ranking DR > R > X > T > S does not hold: the base learner matters more than the recipe. R-Learner is 2nd with CatBoost (0.241) but near the bottom with LightGBM (0.140), and both X-Learners sit at the bottom.
+- **Do not fit a propensity you already know.** Treatment is Bernoulli(0.85) by design, but a 300-tree LightGBM asked to predict it produces ê spanning [0.497, 0.99]. In notebook 04 that inflates the AIPW standard error 59% above a plain difference in means and pushes the ATE confidence interval across zero; with the known constant, AIPW is *more* efficient than the difference in means (SE ratio 0.96) and the CI is [+0.00065, +0.00143]. In notebook 05 the same mistake supplied 63% of the DR pseudo-outcome's variance and biased its mean.
+- **DR-loss HPO finds no signal here.** Against a constant-mean model on the same folds, the best of 50 configs gains +2.5e-5 (z = 0.9, and optimistic) with the known propensity and -4.4e-5 with a fitted one; the untuned baseline is significantly worse than the constant in both. Both searches pick the most shrunk config, and their tuned-vs-baseline Qini goes opposite ways (0.271 vs 0.191; 0.105 vs 0.159). The top leaderboard row comes out of that search.
+- **Ranking well is not estimating well.** The leaderboard now prints `tau_min`/`tau_max`. 17 of the 21 CATE models predict individual effects more than 100x the ~0.00125 ATE - `R-Learner (CB)` reaches -1.62. Those models rank acceptably and are useless for sizing a campaign. The forests are the well-behaved exception (`CausalForestDML` spans [-0.007, +0.050]).
+- **AUUC adds nothing next to Qini here.** Under sklift's normalization with randomized assignment the two are nearly proportional (ratio 0.0330-0.0338 across all rows) and rank identically on this run.
 - Policy value (ERUPT) is within noise: the best top-20% policy value (0.00348) sits above treat-all (0.00325) and treat-none (0.00200), but the gap to treat-all is smaller than the estimator's standard error at ~300 conversions. This run does not establish that targeting beats blanket treatment.
 - Uplift@10%/@20% now carry bootstrap CIs, because they rest on very little: `strategy='by_group'` puts 1,500 control rows in the top decile, holding 3-26 conversions depending on the model. The leader captures 201 treated conversions there against the outcome-rank baseline's 241, and still scores higher, purely because 16 rather than 24 control converters landed in its slice.
 - HTE drivers depend on the lens: `f8` tops mean |SHAP| on the treated-arm outcome model, while the standardized SparseLinearDML coefficients put `f11` first. A linear final stage only sees linear heterogeneity, so this is a difference in what each method can detect.
@@ -125,7 +126,7 @@ Leaderboard, all Qini curves, and decile uplift for the top 3 models (hold-out, 
 
 ![Decile uplift, top 3 models](figures/benchmark_top3_deciles.png)
 
-The curves make the "mostly noise" point visible: the top ~16 models form one overlapping band, well above the random diagonal but not cleanly separable from each other; only the two DA-Learners, `DR-Learner (AIPW)` and the X-Learners trail clearly. In the decile plots the leaders put the real uplift in the top decile and sit flat-to-negative elsewhere - the ranking signal is thin and lives at the very top.
+The curves make the "mostly noise" point visible: the top ~16 models form one overlapping band, well above the random diagonal but not cleanly separable from each other; only the two DA-Learners, the X-Learners, `UpliftRF (KL)` and `DR-Learner (CB)` trail clearly. In the decile plots the leaders put the real uplift in the top decile and sit flat-to-negative elsewhere - the ranking signal is thin and lives at the very top.
 
 ### Uncertainty of individual effects (notebook 07)
 
@@ -135,7 +136,7 @@ Point predictions are only half the story. `07_conformal.ipynb` builds finite-sa
 
 ![Conformal half-width vs target coverage](figures/07_conformal_staircase.png)
 
-The pseudo-outcome scores form four spikes (top): 99.7% are tiny, and the rare converters sit at `~1/e` and `~1/(1-e)`. Interval width then follows a staircase (bottom): it stays a few thousandths wide until the target coverage crosses the converter mass (~99.7%), then jumps to ~1.2 and ~6.7 - step heights set by the `1/e` and `1/(1-e)` factors of the 85/15 design, not by the model. The verifiable guarantee (pseudo-outcome coverage) tracks nominal throughout; for individual-level uncertainty on rare binary outcomes, group-level statements (bootstrap tiers, quantile-group ATEs) are what remain informative.
+The pseudo-outcome scores form four spikes (top): 99.7% are tiny, and the rare converters sit at `~1/e` and `~1/(1-e)`. Interval width then follows a staircase (bottom): it stays under 0.01 up to ~95% coverage, widens to 0.1-0.3 at 99-99.5%, then steps to ~1.2 and ~6.7 as it absorbs the treated and control converters - step heights set by the `1/e` and `1/(1-e)` factors of the 85/15 design, not by the model. The verifiable guarantee (pseudo-outcome coverage) tracks nominal throughout; for individual-level uncertainty on rare binary outcomes, group-level statements (bootstrap tiers, quantile-group ATEs) are what remain informative.
 
 ## What may be skipped at runtime
 
@@ -146,5 +147,5 @@ The pseudo-outcome scores form four spikes (top): 99.7% are tiny, and the rare c
 
 - Results were produced at `SAMPLE_SIZE = 500_000`. The 20% hold-out then has 306 conversions, only 30 of them in the control arm, so Qini differences are noisy - notebook 06 quantifies this with a 2,000-resample stratified paired bootstrap, and the takeaway is that most models are statistically tied. For a publishable ranking, run on the full dataset (≥1M-row hold-out) and across several split seeds.
 - The bootstrap CIs are conditional: resampling within (treatment × outcome) cells fixes the conversion counts, so they understate total uncertainty. The leader is also selected on the same hold-out used to build its interval, which biases the tier narrow. Both effects push toward the "everything is tied" conclusion, so it survives them.
-- `Time(s)` is wall-clock collected per notebook, not a like-for-like benchmark. Notebooks 03, 04, 05 and 06 were re-executed during a correctness pass on a host several times slower than the original run, while 01 and 02 kept their earlier timings - `DR-Learner (AIPW)` moved from 77s to 250s without its model code changing. Read the column as an order-of-magnitude hint only.
+- `Time(s)` is wall-clock per model. Notebooks 01-06 were re-executed in one session on one machine, so the column is roughly comparable, but it is not a controlled benchmark (single run, no control over background load). Read it as an order-of-magnitude hint only.
 - DragonNet did not run in this pass (TensorFlow not installed); every other model did.

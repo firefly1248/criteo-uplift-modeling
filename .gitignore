@@ -12,7 +12,6 @@ catboost_info/
 
 # Jupyter
 .ipynb_checkpoints/
-*/.ipynb_checkpoints/
 
 # Python
 __pycache__/
@@ -21,13 +20,13 @@ __pycache__/
 .pytest_cache/
 .ipynb_convert/
 
-# Virtual environments
+# Environments
 .venv/
 venv/
 env/
 .env
 
-# Dataset cache (scikit-uplift downloads here; ~300 MB, never commit)
+# Local dataset copies (the loader caches to ~/scikit-uplift-data, outside the repo)
 data/
 *.csv.gz
 criteo*.csv

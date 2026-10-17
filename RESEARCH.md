@@ -34,15 +34,15 @@ These figures come from a cited large-scale comparison, **not** from this repo's
 
 ### 2. Feature Importance
 
-- f8 is the dominant HTE driver (SHAP across multiple studies, and reproduced here: f8 tops mean |SHAP|
-  on this repo's own treated-arm model, see `eda_shap.png`)
+- f8 is reported as the dominant HTE driver (SHAP across multiple studies). Here it tops mean |SHAP|
+  on the treated-arm outcome model, which is not the CATE (see `eda_shap.png`)
 - Ranking by LightGBM gain on the outcome model is a different ordering (f11, f4, f8, f2) - gain ranks
   drivers of E[Y|X], not of tau(x)
 - Features are randomly projected - no domain interpretation available
 - Scales differ by two orders of magnitude (sd from 0.023 for f11 to 7.03 for f9), and f4, f8, f11 are
   near point masses with tails. Irrelevant for trees, but it makes raw linear coefficients unreadable as
   an importance ranking - compare `coef * sd`, not `|coef|`. In notebook 03 the correction shrinks f11's
-  apparent lead from 63x to 3.0x without changing who leads
+  apparent lead from 61x to 2.6x without changing who leads
 - SHAP on the treated-arm outcome model and the standardized SparseLinearDML coefficients disagree
   (f8 first vs f11 first). Expected: a linear final stage sees only linear heterogeneity, and SHAP there
   explains E[Y|X,T=1] rather than tau(x)
@@ -98,23 +98,23 @@ Very small absolute effects → metrics like AUUC and Qini are sensitive to nois
 3. LightGBM > XGBoost as base learner on this dataset (faster, similar accuracy)
 4. For meta-learners, fix nuisance hyperparameters first, then tune the CATE model
 5. CausalForestDML combines DML robustness with forest flexibility and holds up well across studies;
-   on this repo's executed run it lands mid-table (rank 9 of 23), inside the leader's bootstrap tier
+   on this repo's executed run it lands mid-table (rank 10 of 23), inside the leader's bootstrap tier
 6. The S-Learner's built-in regularization is often argued to help when the effect is small, but it does
-   not show up here: S-Learner ranks 11 (CatBoost) and 13 (LightGBM) of 23
-7. Check the scale of tau_hat, not just its ranking. The top-ranked model on this leaderboard predicts
-   effects in [-0.68, +1.80] for a true effect of +0.00125, which is fine for Qini and useless for sizing
+   not show up here: S-Learner ranks 13 (CatBoost) and 14 (LightGBM) of 23
+7. Check the scale of tau_hat, not just its ranking. `R-Learner (CB)`, second on this leaderboard, predicts
+   effects in [-1.62, +1.09] for a true effect of +0.00125, which is fine for Qini and useless for sizing
    a campaign
 
 ### HPO
 
-- DR-loss works as an HPO objective on Criteo, but only once the propensity inside the pseudo-outcome
-  is the known constant. Notebook 05 runs the identical search both ways: with a fitted LGBM propensity
-  the tuned model loses to the untuned baseline (Qini 0.069 vs 0.159); with the known constant it wins
-  clearly (0.271 vs 0.191). The fitted propensity supplied 63% of the pseudo-outcome variance
-- Diagnostic, three lines, run it every time: compare the best objective against `Var(pseudo)` and the
-  achievable gain against the ceiling `Var(tau)`. A search claiming more improvement than the ceiling
-  allows is fitting its own sampling noise. Judge the gain against the ceiling, not against the total -
-  the working run explains just 0.16% of pseudo-outcome variance against a 0.27% ceiling, which is fine
+- The known constant propensity matters for the DR pseudo-outcome: a fitted LGBM propensity supplied
+  63% of its variance and biased its mean (notebook 05). It does not make DR-loss usable for HPO at this
+  sample size: neither search (known or fitted e) beats a constant-mean model on paired out-of-fold error
+  (winner z = +0.9 and -0.4), both pick the most shrunk config, and tuned-vs-baseline Qini goes opposite
+  ways (0.271 vs 0.191 with the known e, 0.105 vs 0.159 with the fitted one)
+- Signal check, run it every time: score a `DummyRegressor` on the same folds and report the winner's
+  row-wise out-of-fold gain with a paired SE. A gain within about one SE of zero means the search is
+  selecting noise. Do not bound `Var(tau)` from hold-out decile spreads; that leaks the hold-out
 - Run HPO on a 500K subsample; notebook 05 uses 3-fold CV inside the training set
 - Final model selection: Qini on the 20% hold-out (never touched during HPO)
 - Optuna TPE sampler, 50 trials, no pruner (each trial is an atomic `cross_val_score`, nothing to prune)
